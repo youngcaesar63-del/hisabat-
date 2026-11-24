@@ -1,5 +1,5 @@
 /* Service Worker — تشغيل البرنامج دون إنترنت بعد أول فتح */
-const CACHE = 'hisabat-v38';
+const CACHE = 'hisabat-v39';
 const ASSETS = [
   './',
   './index.html',

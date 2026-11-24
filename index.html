@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f766e">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http: ws:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <meta name="referrer" content="no-referrer">
-<script>window.APP_BUILD = {iso:'2026-11-24T08:21Z', size:'265662', fingerprint:'8cb164e5b237eb2a4cdfa72c81480e0d5357696e5b5742d57d326e9ea47c2a25'};</script>
+<script>window.APP_BUILD = {iso:'2026-11-24T08:43Z', size:'267317', fingerprint:'f9e56e7730e1959a95a9a28939bbc09fa54032db991e46f85797e651e5aacc5e'};</script>
 <title>برنامج الحسابات — الوارد والمنصرف</title>
 <style>
 *,
@@ -1486,6 +1486,8 @@ function purgeTrashNow(silent) {
   const removed = list.length - keep.length;
   if (removed > 0) {
     S.trash = keep.slice(0, 300);
+    // علامة زمنية للتفريغ: تمنع المزامنة من إعادة ما أُفرغ تلقائياً (نفس منطق زر «تفريغ»)
+    S.trashClearedAt = Math.max(+S.trashClearedAt || 0, cut);
     logAct('settings', 'تفريغ تلقائي لسلة المحذوفات (' + removed + ' عنصر أقدم من ' + days + ' يوماً)');
     saveNow();
     if (!silent) { renderView(); toast('أُفرغ ' + removed + ' عنصر قديم من السلة', 'ok'); }
@@ -1753,6 +1755,18 @@ function mergeForeignState(rawStr) {
     const merged = mergeLists(S[name], other[name], fn);
     if (merged.length !== before) { S[name] = merged; changed = true; }
   });
+  // السلة: نستبعد ما أُفرغ نهائياً وما استُعيد — وإلا رجعت المحذوفات عند دمج نسخة أقدم
+  if (Array.isArray(S.trash)) {
+    const cleared = Math.max(+S.trashClearedAt || 0, +other.trashClearedAt || 0);
+    const res = Object.assign({}, S.restoredIds || {}, other.restoredIds || {});
+    S.trash = S.trash.filter(t => {
+      const push = +t.ts || 0;
+      if (push <= cleared) return false;
+      const orig = (t.item && t.item.id) || null;
+      return !(orig && (+res[orig] || 0) > push);
+    });
+    if (cleared > (+S.trashClearedAt || 0)) S.trashClearedAt = cleared;
+  }
   if (other.deletedIds && S.deletedIds) {
     Object.keys(other.deletedIds).forEach(k => {
       if (!(k in S.deletedIds)) { S.deletedIds[k] = other.deletedIds[k]; changed = true; }
@@ -1853,6 +1867,7 @@ function migrate(o) {
   if (!Array.isArray(o.users)) o.users = [];
   if (!Array.isArray(o.audit)) o.audit = [];
   if (!Array.isArray(o.trash)) o.trash = [];
+  if (!(+o.trashClearedAt > 0)) o.trashClearedAt = 0;   // وقت آخر تفريغ للسلة (يمنع رجوع المحذوفات بعد المزامنة)
   if (!o.deletedIds || typeof o.deletedIds !== 'object') o.deletedIds = {};
   if (!o.restoredIds || typeof o.restoredIds !== 'object') o.restoredIds = {};
   if (!o.settings.sync) o.settings.sync = null;
@@ -1916,6 +1931,7 @@ function seedState() {
     users: [],
     audit: [],
     trash: [],
+    trashClearedAt: 0,
     deletedIds: {},
     restoredIds: {}
   };
@@ -4781,6 +4797,7 @@ const ACTIONS = {
   'trash-empty': async () => {
     if (!(await ask('تفريغ سلة المحذوفات نهائياً؟', 'تفريغ'))) return;
     S.trash = [];
+    S.trashClearedAt = Date.now();   // علامة زمنية: كل حذفة أقدم من هذا الوقت أُفرغت نهائياً
     logAct('reset', 'تفريغ سلة المحذوفات');
     saveNow(); renderView(); toast('تم التفريغ', 'ok');
   },
@@ -5200,9 +5217,18 @@ function syncMergeDocs(local, remote) {
   (local.audit || []).forEach(a => auditMap.set(a.id, a));
   const audit = Array.from(auditMap.values()).sort((x, y) => String(y.at).localeCompare(String(x.at))).slice(0, 3000);
 
+  // السلة: اتحاد بالمعرّف، ثم استبعاد ما أُفرغ نهائياً (trashClearedAt) وما استُعيد بعد حذفه.
+  // بدون هذا كان «تفريغ السلة» يُلغى عند أول مزامنة لأن النسخة السحابية الأقدم تُعيد الإدخالات.
+  const cleared = Math.max(+local.trashClearedAt || 0, +remote.trashClearedAt || 0);
   const trashMap = new Map();
   (local.trash || []).forEach(t => trashMap.set(t.id, t));
   (remote.trash || []).forEach(t => { if (!trashMap.has(t.id)) trashMap.set(t.id, t); });
+  const trash = Array.from(trashMap.values()).filter(t => {
+    const push = +t.ts || 0;
+    if (push <= cleared) return false;                       // أُفرغت السلة بعد هذه الحذفة
+    const orig = (t.item && t.item.id) || null;
+    return !(orig && (+res[orig] || 0) > push);              // استُرجعت بعد الحذف
+  });
 
   return {
     version: 1,
@@ -5215,7 +5241,8 @@ function syncMergeDocs(local, remote) {
     users: keepLive(syncMergeArr(local.users, remote.users)),
     audit: audit,
     auditBase: local.auditBase || remote.auditBase || '',
-    trash: Array.from(trashMap.values()),
+    trash: trash,
+    trashClearedAt: cleared,
     deletedIds: del,
     restoredIds: res
   };
@@ -5234,6 +5261,7 @@ function syncPayload(doc) {
     audit: (doc.audit || []).slice(0, 800),
     auditBase: doc.auditBase || '',
     trash: (doc.trash || []).slice(0, 100),
+    trashClearedAt: +doc.trashClearedAt || 0,
     deletedIds: doc.deletedIds || {},
     restoredIds: doc.restoredIds || {}
   };
@@ -5253,6 +5281,7 @@ function syncApply(merged) {
   const newestSealed = (merged.audit || []).find(a => a && a.h);
   if (newestSealed) S.auditHead = newestSealed.h;
   S.trash = merged.trash;
+  S.trashClearedAt = +merged.trashClearedAt || 0;
   S.deletedIds = merged.deletedIds;
   S.restoredIds = merged.restoredIds || {};
   saveNow();
