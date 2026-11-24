@@ -1,0 +1,20 @@
+{
+  "name": "برنامج الحسابات — الوارد والمنصرف",
+  "short_name": "الحسابات",
+  "description": "دفتر الوارد والمنصرف: حسابات، عملاء وموردون، تقارير وتصدير Excel — يعمل دون إنترنت.",
+  "id": "hisabat-app",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b3b39",
+  "theme_color": "#0f766e",
+  "dir": "rtl",
+  "lang": "ar",
+  "categories": ["finance", "business", "productivity"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
