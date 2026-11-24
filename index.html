@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f766e">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http: ws:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <meta name="referrer" content="no-referrer">
-<script>window.APP_BUILD = {iso:'2026-11-23T23:40Z', size:'263879', fingerprint:'0bf4e72fd569eadc4f3d3305dbcad1b2bcb40d3adcacb5aae545bad4f395d4cc'};</script>
+<script>window.APP_BUILD = {iso:'2026-11-24T08:21Z', size:'265662', fingerprint:'8cb164e5b237eb2a4cdfa72c81480e0d5357696e5b5742d57d326e9ea47c2a25'};</script>
 <title>برنامج الحسابات — الوارد والمنصرف</title>
 <style>
 *,
@@ -425,6 +425,32 @@ textarea { resize: vertical; min-height: 62px; }
   .topbar .sub { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .filters .seg { width: 100%; display: flex; }
   .filters .seg button { flex: 1 1 0; padding: 7px 4px; font-size: 12px; }
+
+  /* جدول المعاملات على الهاتف: الصف = بطاقة سطرين — المبلغ وأزرار الإجراءات ظاهرة دائماً
+     (كان الجدول 456px داخل 332px، فيقع عمود «إجراءات» خارج الشاشة ولا يمكن التعديل) */
+  .txn-table thead { display: none; }
+  .txn-table, .txn-table tbody, .txn-table tfoot { display: block; width: 100%; }
+  .txn-table tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "desc amt amt" "date type acts";
+    gap: 5px 10px; align-items: center;
+    padding: 10px 12px; border-bottom: 1px solid var(--line);
+  }
+  .txn-table tbody tr { transition: none; }
+  .txn-table td:not(.hide-sm) { display: block; padding: 0; border: 0; text-align: start; }
+  .txn-table td.c-desc { grid-area: desc; min-width: 0; overflow-wrap: anywhere; }
+  .txn-table td.c-amt { grid-area: amt; text-align: end; white-space: nowrap; font-size: 13.5px; }
+  .txn-table td.c-date { grid-area: date; color: var(--ink-3); font-size: 11.5px; white-space: nowrap; }
+  .txn-table td.c-type { grid-area: type; justify-self: start; }
+  .txn-table td.c-acts { grid-area: acts; display: flex; gap: 6px; justify-content: flex-end; }
+  .txn-table td.c-acts .icon-btn { width: 34px; height: 34px; }
+  .txn-table tfoot tr {
+    display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; align-items: center;
+    padding: 10px 12px; background: var(--bg); border-top: 2px solid var(--line);
+  }
+  .txn-table tfoot td:not(.hide-sm) { display: block; padding: 0; border: 0; background: transparent; text-align: start; }
+  .txn-table tfoot td.c-net { text-align: end; }
+  .txn-table tfoot td.c-net::before { content: "الصافي: "; font-weight: 600; color: var(--ink-2); }
 }
 
 /* ===== شاشة القفل ===== */
@@ -2939,17 +2965,17 @@ function txnRow(t, compact) {
   const desc = t.desc || catName(t.category) || (t.kind === 'transfer' ? 'تحويل بين الحسابات' : '—');
   const acc = t.kind === 'transfer' ? accName(t.account) + ' ← ' + accName(t.toAccount) : accName(t.account);
   return '<tr>' +
-    '<td class="nowrap small">' + esc(dmy(t.date)) + '</td>' +
-    '<td>' + txnBadge(t.kind) + '</td>' +
-    '<td><b>' + esc(desc) + '</b>' +
+    '<td class="nowrap small c-date">' + esc(dmy(t.date)) + '</td>' +
+    '<td class="c-type">' + txnBadge(t.kind) + '</td>' +
+    '<td class="c-desc"><b>' + esc(desc) + '</b>' +
       (catName(t.category) && t.desc ? '<div class="small muted">' + esc(catName(t.category)) + '</div>' : '') +
       (t.contact ? '<div class="small muted">' + esc(contactName(t.contact)) + '</div>' : '') + '</td>' +
-    (compact ? '' : '<td class="small hide-sm">' + esc(acc) + '</td>') +
-    '<td class="num nowrap" style="color:' + color + ';font-weight:700">' + sign + fmt(t.amount) +
+    (compact ? '' : '<td class="small hide-sm c-acc">' + esc(acc) + '</td>') +
+    '<td class="num nowrap c-amt" style="color:' + color + ';font-weight:700">' + sign + fmt(t.amount) +
       ' <span class="small muted">' + esc(t.currency) + '</span></td>' +
-    '<td class="num nowrap hide-sm">' + fmt(amt) + '</td>' +
+    '<td class="num nowrap hide-sm c-base">' + fmt(amt) + '</td>' +
     (compact ? '' :
-      '<td class="no-print nowrap">' +
+      '<td class="no-print nowrap c-acts">' +
         '<button class="icon-btn" data-act="txn-edit" data-id="' + t.id + '" title="تعديل">✏️</button>' +
         '<button class="icon-btn" data-act="txn-del" data-id="' + t.id + '" title="حذف">🗑️</button>' +
       '</td>') +
@@ -2976,12 +3002,12 @@ function txnListHtml(list) {
     '<div class="card-head"><h3>الحركات (' + list.length + ')</h3><div class="spacer"></div>' +
       '<span class="small muted hide-sm">المبالغ بالعملة الأساسية: ' + esc(S.settings.base) + '</span></div>' +
     (list.length ?
-      '<div class="table-wrap"><table><thead><tr>' +
+      '<div class="table-wrap"><table class="txn-table"><thead><tr>' +
         '<th>التاريخ</th><th>النوع</th><th>البيان</th><th class="hide-sm">الحساب</th>' +
         '<th class="num">المبلغ</th><th class="num hide-sm">المعادل</th><th class="no-print">إجراءات</th>' +
       '</tr></thead><tbody>' + view.map(x => txnRow(x, false)).join('') + '</tbody>' +
-      '<tfoot><tr><td colspan="3" class="small">وارد ' + fmt(t.income) + ' · منصرف ' + fmt(t.expense) + '</td>' +
-        '<td class="hide-sm"></td><td class="num hide-sm"></td><td class="num">' + fmt(t.net) + '</td><td class="no-print"></td></tr></tfoot>' +
+      '<tfoot><tr><td colspan="3" class="small c-sum">وارد ' + fmt(t.income) + ' · منصرف ' + fmt(t.expense) + '</td>' +
+        '<td class="hide-sm"></td><td class="num hide-sm"></td><td class="num c-net">' + fmt(t.net) + '</td><td class="no-print c-acts"></td></tr></tfoot>' +
       '</table></div>' +
       (more > 0 ?
         '<div class="small muted no-print" style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap">' +
