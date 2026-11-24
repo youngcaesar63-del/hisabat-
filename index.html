@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f766e">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http: ws:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <meta name="referrer" content="no-referrer">
-<script>window.APP_BUILD = {iso:'2026-11-24T11:21Z', size:'287961', fingerprint:'a8a4b4b48b2ebf0f950639d4778ed8a7f9d43d1e5c9581c6c223d9ab9c1760c9'};</script>
+<script>window.APP_BUILD = {iso:'2026-11-24T12:47Z', size:'298271', fingerprint:'b2287ffb14a4961a3ef952b017828c50cccc5539fb6c978bc42fb8f834632b6a'};</script>
 <title>برنامج الحسابات — الوارد والمنصرف</title>
 <style>
 *,
@@ -499,6 +499,14 @@ textarea { resize: vertical; min-height: 62px; }
   font-size: 12.5px; color: var(--ink-2); cursor: pointer; line-height: 1.8;
 }
 .rcpt-arch input { width: 18px; height: 18px; accent-color: var(--primary); flex: 0 0 auto; }
+.rcpt-dir {
+  margin-top: 14px; border: 1px dashed var(--line); border-radius: 12px;
+  padding: 10px 12px; background: var(--bg);
+}
+.rcpt-dirhead { font-size: 13px; margin-bottom: 6px; }
+.rcpt-dir .chip { font-size: 11px; padding: 2px 8px; }
+.rcpt-dir .chip.ok { background: var(--primary-soft); border-color: #99e0d6; color: var(--primary-2); }
+.rcpt-dir code { font-size: 12px; }
 
 /* ===== شاشة القفل ===== */
 .lock-screen {
@@ -1563,6 +1571,8 @@ function purgeTrashNow(silent) {
 
 const RCPT_DB = 'hisabat_rcpt';
 const RCPT_STORE = 'files';
+const RCPT_META = 'meta';        // مقبض مجلد الحفظ على الكمبيوتر
+const RCPT_DIR_ID = 'dir';
 const RCPT_BUCKET = 'hisabat_receipts';
 const RCPT_ARCH_KEY = 'hisabat_rcpt_archive';
 const RCPT_MAX_SIDE = 1600;      // أقصى بعد للصورة بعد الضغط
@@ -1576,10 +1586,11 @@ function rcptOpen() {
   return new Promise((res, rej) => {
     if (_rcptDB) return res(_rcptDB);
     if (typeof indexedDB === 'undefined') return rej(new Error('IndexedDB غير متاح'));
-    const r = indexedDB.open(RCPT_DB, 1);
+    const r = indexedDB.open(RCPT_DB, 2);
     r.onupgradeneeded = () => {
       const db = r.result;
       if (!db.objectStoreNames.contains(RCPT_STORE)) db.createObjectStore(RCPT_STORE, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(RCPT_META)) db.createObjectStore(RCPT_META);
     };
     r.onsuccess = () => { _rcptDB = r.result; res(_rcptDB); };
     r.onerror = () => rej(r.error || new Error('تعذّر فتح التخزين'));
@@ -1628,6 +1639,14 @@ function rcptSetArchive(on) {
   try { localStorage.setItem(RCPT_ARCH_KEY, on ? '1' : '0'); } catch (e) {}
   renderView();
   toast(on ? 'هذا الجهاز صار «الأرشيف» — سيستقبل إشعارات بقية الأجهزة' : 'أُلغي وضع الأرشيف على هذا الجهاز', 'ok');
+  if (!on) return;
+  // تفعيل الأرشيف ينقل الإشعارات المعلّقة فوراً (لا ننتظر المزامنة التالية)
+  setTimeout(() => {
+    rcptProcess(true).then(res => {
+      if (res && (res.down || res.cleared)) toast('استُلم ' + res.down + ' إشعاراً على هذا الجهاز ✓', 'ok');
+      renderView();
+    }).catch(() => {});
+  }, 150);
 }
 
 /* ---------- 2) ضغط الصور قبل الحفظ ---------- */
@@ -1711,11 +1730,212 @@ async function rcptView(txnId) {
     const u = await rcptUrlFor(r);
     html += '<figure class="rcpt-item" data-rid="' + esc(r.id) + '">' +
       (u ? '<img src="' + esc(u) + '" alt="إشعار تحويل">' :
-        '<div class="rcpt-missing">' + (r.st === 'x' ? '📎 محفوظ على الكمبيوتر — غير موجود على هذا الجهاز' : 'الصورة غير متاحة على هذا الجهاز بعد') + '</div>') +
+        '<div class="rcpt-missing">' + rcptMissingMsg(r) + '</div>') +
       '<figcaption class="small muted">' + esc((label[r.st] || '') + ' · ' + Math.round((+r.s || 0) / 1024) + 'KB') + '</figcaption></figure>';
   }
   html += '</div>' + '<div class="small muted" style="margin-top:10px">' + esc(t.desc || '') + ' — ' + esc(dmy(t.date)) + ' · ' + esc(fmt(t.amount) + ' ' + t.currency) + '</div>';
   modal({ title: '📎 إشعارات التحويل (' + list.length + ')', body: html, footer: '<button class="btn ghost" data-close>إغلاق</button>' });
+}
+
+function rcptMissingMsg(r) {
+  if (r && r.st === 'x') return '📎 محفوظ على الكمبيوتر — غير موجود على هذا الجهاز';
+  if (r && r.st === 'u') {
+    return '📎 الصورة في السحابة ولم تُستلم هنا بعد.<br>فعّل «هذا الجهاز هو الأرشيف» في الإعدادات، أو اضغط «🔄 نقل الإشعارات الآن» على الكمبيوتر.';
+  }
+  if (r && r.st === 'q') return '📎 الصورة على الجهاز الذي أُرفقت منه ولم تُرفع بعد — ستُرفع عند أول مزامنة.';
+  return 'الصورة غير متاحة على هذا الجهاز بعد';
+}
+
+/* ---------- 4-ب) ملفات في مجلد على الكمبيوتر ---------- */
+function rcptMetaGet(key) {
+  return rcptOpen().then(db => new Promise(res => {
+    const tx = db.transaction(RCPT_META, 'readonly');
+    const g = tx.objectStore(RCPT_META).get(key);
+    g.onsuccess = () => res(g.result === undefined ? null : g.result);
+    g.onerror = () => res(null);
+  }));
+}
+function rcptMetaPut(key, val) {
+  return rcptOpen().then(db => new Promise((res, rej) => {
+    const tx = db.transaction(RCPT_META, 'readwrite');
+    tx.objectStore(RCPT_META).put(val, key);
+    tx.oncomplete = () => res(true);
+    tx.onerror = () => rej(tx.error);
+  }));
+}
+function rcptMetaDel(key) {
+  return rcptOpen().then(db => new Promise(res => {
+    const tx = db.transaction(RCPT_META, 'readwrite');
+    tx.objectStore(RCPT_META).delete(key);
+    tx.oncomplete = () => res(true);
+    tx.onerror = () => res(false);
+  }));
+}
+function rcptDirSupported() {
+  return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+}
+function rcptDirHandle() { return rcptMetaGet(RCPT_DIR_ID); }
+async function rcptDirState() {
+  const h = await rcptDirHandle();
+  if (!h) return { has: false, name: '', granted: false, supported: rcptDirSupported() };
+  let perm = 'prompt';
+  try { perm = await h.queryPermission({ mode: 'readwrite' }); } catch (e) {}
+  return { has: true, name: h.name || 'مجلد', granted: perm === 'granted', supported: rcptDirSupported() };
+}
+async function rcptPickDir() {
+  if (!rcptDirSupported()) {
+    toast('هذا المتصفح لا يدعم الحفظ في مجلد — استخدم Chrome أو Edge على الكمبيوتر', 'err');
+    return false;
+  }
+  let h = null;
+  try {
+    h = await window.showDirectoryPicker({ id: 'hisabat-rcpt', mode: 'readwrite', startIn: 'documents' });
+  } catch (e) { return false; }                     // ألغى المستخدم
+  if (!h) return false;
+  try { await rcptMetaPut(RCPT_DIR_ID, h); } catch (e) { toast('تعذّر ربط المجلد', 'err'); return false; }
+  const n = await rcptDumpToDir();
+  toast('رُبط المجلد «' + (h.name || '') + '» ✓' + (n ? ' — حُفظ ' + n + ' إشعاراً' : ''), 'ok');
+  renderView();
+  return true;
+}
+async function rcptGrantDir() {
+  const h = await rcptDirHandle();
+  if (!h) return false;
+  let perm = 'denied';
+  try { perm = await h.requestPermission({ mode: 'readwrite' }); } catch (e) {}
+  if (perm !== 'granted') { toast('لم يُسمح بالكتابة في المجلد', 'err'); renderView(); return false; }
+  const n = await rcptDumpToDir();
+  toast('الحفظ في المجلد مفعّل ✓' + (n ? ' — حُفظ ' + n + ' إشعاراً' : ''), 'ok');
+  renderView();
+  return true;
+}
+async function rcptUnlinkDir() {
+  await rcptMetaDel(RCPT_DIR_ID);
+  toast('فُصل المجلد — تبقى الملفات المحفوظة فيه كما هي', 'ok');
+  renderView();
+}
+function rcptMonthKey(t) {
+  const m = String((t && t.date) || '').match(/^(\d{4})-(\d{2})/);
+  return m ? m[1] + '-' + m[2] : 'بدون-تاريخ';
+}
+async function rcptMonthDir(dir, key) {
+  return await dir.getDirectoryHandle(key, { create: true });
+}
+function rcptSafeName(s) {
+  return String(s || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+function rcptFileName(t, r) {
+  const d = String((t && t.date) || '').slice(0, 10) || 'بلا-تاريخ';
+  const amt = String(Math.round(+((t && t.amount) || 0)));
+  const cur = rcptSafeName((t && t.currency) || '');
+  const desc = rcptSafeName((t && t.desc) || '') || 'بدون-بيان';
+  return d + '_' + desc + '_' + amt + cur + '_' + String(r.id).slice(-6) + '.jpg';
+}
+async function rcptWriteDir(dir, name, blob) {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  await w.write(blob);
+  await w.close();
+}
+async function rcptSaveToDir(t, r, blob) {
+  let st = null;
+  try { st = await rcptDirState(); } catch (e) { return false; }
+  if (!st.has || !st.granted) return false;
+  try {
+    const dir = await rcptDirHandle();
+    const md = await rcptMonthDir(dir, rcptMonthKey(t));     // مجلد الشهر (2026-11)
+    await rcptWriteDir(md, rcptFileName(t, r), blob);
+    await rcptWriteDir(md, 'فهرس-الإشعارات.csv', await rcptMonthIndex(dir, rcptMonthKey(t)));
+    return true;
+  } catch (e) { return false; }
+}
+function rcptCsvCell(v) {
+  const s = String(v === undefined || v === null ? '' : v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function rcptRowsOfMonth(monthKey) {
+  const out = [];
+  (S.txns || []).forEach(t => {
+    if (rcptMonthKey(t) !== monthKey) return;
+    (t.receipts || []).forEach(r => {
+      const acc = (S.accounts || []).find(a => a.id === t.account);
+      const ct = (S.contacts || []).find(x => x.id === t.contact);
+      out.push([t.date, t.desc, t.amount, t.currency, acc ? acc.name : '', ct ? ct.name : '', rcptFileName(t, r)]);
+    });
+  });
+  return out;
+}
+function rcptCsvBlob(rows) {
+  const head = ['التاريخ', 'البيان', 'المبلغ', 'العملة', 'الحساب', 'الطرف', 'اسم الملف'];
+  const csv = '\ufeff' + [head].concat(rows).map(r => r.map(rcptCsvCell).join(',')).join('\r\n');
+  return new Blob([csv], { type: 'text/csv;charset=utf-8' });
+}
+async function rcptMonthIndex(dir, monthKey) {
+  return rcptCsvBlob(rcptRowsOfMonth(monthKey));
+}
+async function rcptDumpToDir() {
+  let st = null;
+  try { st = await rcptDirState(); } catch (e) { return 0; }
+  if (!st.has || !st.granted) return 0;
+  const dir = await rcptDirHandle();
+  if (!dir) return 0;
+  const months = {};
+  let n = 0;
+  for (const t of (S.txns || []).slice()) {
+    const mk = rcptMonthKey(t);
+    for (const r of (t.receipts || [])) {
+      const row = await rcptGet(r.id);
+      if (!row || !row.blob) continue;
+      try {
+        if (!months[mk]) months[mk] = await rcptMonthDir(dir, mk);
+        await rcptWriteDir(months[mk], rcptFileName(t, r), row.blob);
+        n++;
+      } catch (e) { continue; }
+    }
+  }
+  // فهرس لكل شهر داخل مجلده
+  const all = [];
+  for (const mk of Object.keys(months)) {
+    const rows = rcptRowsOfMonth(mk);
+    try { await rcptWriteDir(months[mk], 'فهرس-الإشعارات.csv', rcptCsvBlob(rows)); } catch (e) {}
+    rows.forEach(r => all.push([mk].concat(r)));
+  }
+  // فهرس شامل في الجذر يربط كل صورة بمجلد شهرها
+  try {
+    const head = ['مجلد الشهر', 'التاريخ', 'البيان', 'المبلغ', 'العملة', 'الحساب', 'الطرف', 'اسم الملف'];
+    const csv = '\ufeff' + [head].concat(all).map(r => r.map(rcptCsvCell).join(',')).join('\r\n');
+    await rcptWriteDir(dir, 'فهرس-الكل.csv', new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  } catch (e) {}
+  return n;
+}
+function rcptDirBoxHtml() {
+  return '<div class="rcpt-dir" id="rcptDirBox"><span class="small muted">جارٍ التحقق من مجلد الحفظ…</span></div>';
+}
+async function rcptPaintDir() {
+  const box = document.getElementById('rcptDirBox');
+  if (!box) return;
+  const st = await rcptDirState();
+  let html = '<div class="rcpt-dirhead"><b>📁 مجلد الإشعارات على الكمبيوتر</b></div>';
+  if (!st.supported && !st.has) {
+    html += '<div class="small muted">هذا المتصفح لا يدعم الحفظ في مجلد (يحتاج Chrome أو Edge على الكمبيوتر). ' +
+            'الصور محفوظة داخل المتصفح وتُضمَّن في النسخة الاحتياطية المشفّرة.</div>';
+  } else if (!st.has) {
+    html += '<div class="small muted" style="margin-bottom:8px">اختر مجلداً (مثل «إشعارات-حسابات» في المستندات) — يُنشئ البرنامج داخله ' +
+            '<b>مجلداً لكل شهر</b> (2026-11 · 2026-12 …) ويحفظ فيه صور ذلك الشهر مع فهرسه، ' +
+            'ويضع <b>فهرس-الكل.csv</b> في الجذر.</div>' +
+            '<button class="btn ghost sm" data-act="rcpt-dir-pick">📁 اختيار مجلد للحفظ</button>';
+  } else {
+    html += '<div class="small" style="margin-bottom:6px">المجلد المرتبط: <b>' + esc(st.name) + '</b> ' +
+            (st.granted ? '<span class="chip ok">الحفظ التلقائي مفعّل ✓</span>' : '<span class="chip">يحتاج سماحاً</span>') + '</div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+    if (!st.granted) html += '<button class="btn ghost sm" data-act="rcpt-dir-grant">✅ تفعيل الحفظ في المجلد</button>';
+    html += '<button class="btn ghost sm" data-act="rcpt-dir-save">💾 حفظ الكل الآن</button>' +
+            '<button class="btn ghost sm" data-act="rcpt-dir-pick">📁 تغيير المجلد</button>' +
+            '<button class="btn ghost sm" data-act="rcpt-dir-unlink">✖ فصل المجلد</button>';
+    html += '</div><div class="small muted" style="margin-top:6px">كل إشعار يُستلم على هذا الجهاز يُكتب تلقائياً في ' +
+            '<b>مجلد شهره</b>، ومع كل شهر ملف <b>فهرس-الإشعارات.csv</b> يربط صوره بمعاملاتها.</div>';
+  }
+  box.innerHTML = html;
 }
 
 /* ---------- 5) النقل عبر Supabase Storage ---------- */
@@ -1771,6 +1991,7 @@ async function rcptProcess(silent) {
         if (blob) {
           await rcptPut(r.id, blob, { txnId: t.id, size: blob.size, mime: blob.type || 'image/jpeg' });
           r.st = 'a'; r.at2 = Date.now(); touchRec(t); down++;
+          rcptSaveToDir(t, r, blob).catch(() => {});     // نسخة كملف في المجلد المرتبط
           if (await rcptCloudDel(t.id, r)) cleared++;
         }
       }
@@ -1883,6 +2104,7 @@ function rcptCardHtml() {
   const c = (typeof syncCfg === 'function') ? syncCfg() : null;
   const okSync = !!(c && c.uid);
   const size = bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB' : Math.round(bytes / 1024) + 'KB';
+  setTimeout(() => { rcptPaintDir(); }, 0);      // يُملأ بعد إدراج البطاقة في الصفحة
   return '<div class="card">' +
     '<div class="card-head"><h3>📎 إشعارات التحويل</h3><div class="spacer"></div><span class="badge n">' + n + '</span></div>' +
     '<div class="small muted" style="margin-bottom:10px">الصورة تُرفع من الهاتف وتُحفظ على «جهاز الأرشيف» فقط، ثم تُحذف من الهاتف تلقائياً بعد الإقرار.</div>' +
@@ -1900,6 +2122,7 @@ function rcptCardHtml() {
     '<label class="rcpt-arch"><input type="checkbox" id="rcptArch" ' + (arch ? 'checked' : '') + ' data-act="rcpt-arch"> ' +
       '<span>هذا الجهاز هو «الأرشيف» — يستقبل إشعارات بقية الأجهزة (اجعله على الكمبيوتر)</span></label>' +
     (!okSync ? '<div class="small" style="color:var(--out);margin-top:8px">⚠️ فعّل المزامنة أولاً — بدون حساب سحابي لا تنتقل الإشعارات بين الأجهزة.</div>' : '') +
+    rcptDirBoxHtml() +
     '<div class="small muted" style="margin-top:8px">📦 النسخة الاحتياطية المشفّرة تضمّ الإشعارات المحفوظة على هذا الجهاز.</div>' +
   '</div>';
 }
@@ -5221,6 +5444,10 @@ const ACTIONS = {
   'rcpt-view': el => rcptView(el.dataset.id),
   'rcpt-now': () => rcptProcess(false),
   'rcpt-arch': () => rcptSetArchive(!rcptIsArchive()),
+  'rcpt-dir-pick': () => rcptPickDir(),
+  'rcpt-dir-grant': () => rcptGrantDir(),
+  'rcpt-dir-save': async () => { const n = await rcptDumpToDir(); toast(n ? 'حُفظ ' + n + ' إشعاراً في المجلد ✓' : 'لا توجد إشعارات محلية لحفظها', n ? 'ok' : 'warn'); renderView(); },
+  'rcpt-dir-unlink': () => rcptUnlinkDir(),
   'sync-reset': () => syncReset(),
   'trash-empty': async () => {
     if (!(await ask('تفريغ سلة المحذوفات نهائياً؟', 'تفريغ'))) return;
@@ -5318,6 +5545,7 @@ function refreshTxnList() {
 const ACT_PERM = {
   'quick-add': 'txn:write', 'txn-new': 'txn:write', 'txn-edit': 'txn:write', 'txn-del': 'txn:delete',
   'rcpt-add': 'txn:write', 'rcpt-del': 'txn:write', 'rcpt-view': '', 'rcpt-now': '', 'rcpt-arch': 'settings',
+  'rcpt-dir-pick': 'settings', 'rcpt-dir-grant': 'settings', 'rcpt-dir-save': 'settings', 'rcpt-dir-unlink': 'settings',
   'acc-new': 'data:write', 'acc-edit': 'data:write', 'acc-del': 'data:write',
   'ct-new': 'data:write', 'ct-edit': 'data:write', 'ct-del': 'data:write',
   'cat-new': 'data:write', 'cat-edit': 'data:write', 'cat-del': 'data:write',
@@ -5995,5 +6223,6 @@ if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
   });
 }
 </script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f891c229f8a743',t:'MTc5NTUyNDk0MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f891c229f8a743',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"1954b47c125f43f8b4338b3c4f804e4f","spa":2}' crossorigin="anonymous"></script>
 </body>
 </html>
