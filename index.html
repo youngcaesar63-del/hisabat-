@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f766e">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http: ws:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <meta name="referrer" content="no-referrer">
-<script>window.APP_BUILD = {iso:'2026-11-24T09:05Z', size:'267317', fingerprint:'8c86405c175efaa3a69a3c90b5cab75eaad1d4c5979fdcd224a35b0aea9d031c'};</script>
+<script>window.APP_BUILD = {iso:'2026-11-24T11:21Z', size:'287961', fingerprint:'a8a4b4b48b2ebf0f950639d4778ed8a7f9d43d1e5c9581c6c223d9ab9c1760c9'};</script>
 <title>برنامج الحسابات — الوارد والمنصرف</title>
 <style>
 *,
@@ -452,6 +452,53 @@ textarea { resize: vertical; min-height: 62px; }
   .txn-table tfoot td.c-net { text-align: end; }
   .txn-table tfoot td.c-net::before { content: "الصافي: "; font-weight: 600; color: var(--ink-2); }
 }
+
+/* ===== إشعارات التحويل (المرفقات) ===== */
+.rcpt-badge {
+  display: inline-flex; align-items: center; gap: 3px; margin-inline-start: 6px;
+  background: var(--primary-soft); color: var(--primary-2); border: 1px solid #99e0d6;
+  border-radius: 999px; padding: 1px 7px; font-size: 11px; font-weight: 700;
+  cursor: pointer; vertical-align: middle; line-height: 1.7;
+}
+.rcpt-badge:hover { background: #d3efea; }
+.rcpt-box {
+  margin-top: 14px; border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; background: var(--bg);
+}
+.rcpt-boxhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+.rcpt-list { display: flex; gap: 8px; flex-wrap: wrap; }
+.rcpt-thumb {
+  position: relative; width: 86px; border: 1px solid var(--line); border-radius: 10px;
+  overflow: hidden; background: var(--card);
+}
+.rcpt-thumb img { display: block; width: 100%; height: 66px; object-fit: cover; }
+.rcpt-meta { font-size: 10px; color: var(--ink-3); padding: 2px 4px; text-align: center; }
+.rcpt-x {
+  position: absolute; top: 3px; inset-inline-end: 3px; width: 26px; height: 26px;
+  border-radius: 50%; border: 0; background: rgba(15, 23, 42, .72); color: #fff;
+  font-size: 13px; cursor: pointer; display: grid; place-items: center; line-height: 1;
+}
+.rcpt-x:hover { background: var(--out); }
+.rcpt-viewer { display: grid; gap: 12px; }
+.rcpt-item { margin: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.rcpt-item img { display: block; width: 100%; height: auto; max-height: 62vh; object-fit: contain; background: #fff; }
+.rcpt-missing {
+  display: grid; place-items: center; min-height: 90px; padding: 14px;
+  color: var(--ink-3); font-size: 12.5px; text-align: center; line-height: 1.8;
+}
+.rcpt-item figcaption { padding: 6px 10px; }
+.rcpt-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.rcpt-stats .chip {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 10px; font-size: 12px; color: var(--ink-2);
+}
+.rcpt-stats .chip b { color: var(--ink); }
+.rcpt-stats .chip.ok { background: var(--primary-soft); border-color: #99e0d6; color: var(--primary-2); }
+.rcpt-arch {
+  display: flex; align-items: center; gap: 8px; margin-top: 12px;
+  font-size: 12.5px; color: var(--ink-2); cursor: pointer; line-height: 1.8;
+}
+.rcpt-arch input { width: 18px; height: 18px; accent-color: var(--primary); flex: 0 0 auto; }
 
 /* ===== شاشة القفل ===== */
 .lock-screen {
@@ -949,10 +996,13 @@ function backupEncrypted() {
           const payload = JSON.parse(JSON.stringify(S));
           delete payload.settings.sync;   // لا تُخزَّن مفاتيح المزامنة في النسخة
           delete payload.settings.pw;
+          // تضمين إشعارات التحويل المحفوظة على هذا الجهاز
+          try { payload.receipts = await rcptDumpForBackup(); } catch (e) { payload.receipts = []; }
           const wrap2 = await secEncryptPayload(payload, p1);
           const name = 'نسخة-مشفرة-' + stamp() + '.enc.json';
           download(new Blob([JSON.stringify(wrap2)], { type: 'application/json' }), name);
-          logAct('backup', 'نسخة احتياطية مشفّرة (' + (payload.txns || []).length + ' معاملة)');
+          logAct('backup', 'نسخة احتياطية مشفّرة (' + (payload.txns || []).length + ' معاملة' +
+            ((payload.receipts || []).length ? ' · ' + payload.receipts.length + ' إشعار' : '') + ')');
           saveNow();
           m.close();
           toast('تم تنزيل النسخة المشفّرة ✓', 'ok');
@@ -998,6 +1048,8 @@ function secApplyImported(obj) {
   if (!obj || !Array.isArray(obj.txns)) { toast('الملف غير صالح — لا يحتوي معاملات', 'err'); return false; }
   const bytes = JSON.stringify(obj).length;
   if (bytes > 40 * 1024 * 1024) { toast('الملف كبير جداً (أكثر من 40 ميجابايت)', 'err'); return false; }
+  const rcptArr = Array.isArray(obj.receipts) ? obj.receipts.slice() : null;  // صور الإشعارات
+  delete obj.receipts;                 // لا تدخل في مستند البيانات (تخزينها في IndexedDB)
   obj = secSanitizeDoc(obj);
   saveSnapshot('قبل الاستيراد');
   const keepPw = S.settings.pw, keepAuto = S.settings.autoLock, keepSec = S.settings.security;
@@ -1009,6 +1061,11 @@ function secApplyImported(obj) {
   LOAD_ISSUES.length = 0;
   saveNow();
   toast('تم استيراد البيانات ✓', 'ok');
+  if (rcptArr && rcptArr.length) {
+    rcptRestoreFromBackup(rcptArr).then(n => {
+      if (n) { toast('استُعيدت ' + n + ' صورة إشعار ✓', 'ok'); renderView(); }
+    });
+  }
   setView('dashboard');
   const rep = integrityReport();
   if (rep.problems.length) setTimeout(() => integrityModal(), 500);
@@ -1493,6 +1550,358 @@ function purgeTrashNow(silent) {
     if (!silent) { renderView(); toast('أُفرغ ' + removed + ' عنصر قديم من السلة', 'ok'); }
   }
   return removed;
+}
+
+
+/* =========================================================
+   إشعارات التحويل (مرفقات المعاملات)
+   - الصور تُخزَّن في IndexedDB (لا تُثقل بيانات التطبيق ولا ملف المزامنة)
+   - النقل بين الأجهزة عبر Supabase Storage (مخزن خاص: hisabat_receipts)
+   - جهاز واحد فقط = «الأرشيف»: يستقبل الصور ويُقرّ الاستلام
+   - لا حذف من الهاتف إلا بعد إقرار الأرشيف؛ ونسخة السحابة تُحذف بعد الإقرار
+   ========================================================= */
+
+const RCPT_DB = 'hisabat_rcpt';
+const RCPT_STORE = 'files';
+const RCPT_BUCKET = 'hisabat_receipts';
+const RCPT_ARCH_KEY = 'hisabat_rcpt_archive';
+const RCPT_MAX_SIDE = 1600;      // أقصى بعد للصورة بعد الضغط
+const RCPT_TARGET = 700000;      // الهدف: أقل من 700 كيلوبايت
+
+var _rcptDB = null;
+var _rcptURLs = new Map();       // ذاكرة مؤقتة لروابط العرض
+
+/* ---------- 1) التخزين المحلي (IndexedDB) ---------- */
+function rcptOpen() {
+  return new Promise((res, rej) => {
+    if (_rcptDB) return res(_rcptDB);
+    if (typeof indexedDB === 'undefined') return rej(new Error('IndexedDB غير متاح'));
+    const r = indexedDB.open(RCPT_DB, 1);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains(RCPT_STORE)) db.createObjectStore(RCPT_STORE, { keyPath: 'id' });
+    };
+    r.onsuccess = () => { _rcptDB = r.result; res(_rcptDB); };
+    r.onerror = () => rej(r.error || new Error('تعذّر فتح التخزين'));
+  });
+}
+async function rcptPut(id, blob, meta) {
+  const db = await rcptOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(RCPT_STORE, 'readwrite');
+    tx.objectStore(RCPT_STORE).put(Object.assign({ id: id, blob: blob, at: Date.now() }, meta || {}));
+    tx.oncomplete = () => res(true);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function rcptGet(id) {
+  const db = await rcptOpen();
+  return new Promise((res) => {
+    const tx = db.transaction(RCPT_STORE, 'readonly');
+    const g = tx.objectStore(RCPT_STORE).get(id);
+    g.onsuccess = () => res(g.result || null);
+    g.onerror = () => res(null);
+  });
+}
+async function rcptDel(id) {
+  const db = await rcptOpen();
+  return new Promise((res) => {
+    const tx = db.transaction(RCPT_STORE, 'readwrite');
+    tx.objectStore(RCPT_STORE).delete(id);
+    tx.oncomplete = () => { const u = _rcptURLs.get(id); if (u) { try { URL.revokeObjectURL(u); } catch (e) {} _rcptURLs.delete(id); } res(true); };
+    tx.onerror = () => res(false);
+  });
+}
+async function rcptAll() {
+  const db = await rcptOpen();
+  return new Promise((res) => {
+    const tx = db.transaction(RCPT_STORE, 'readonly');
+    const g = tx.objectStore(RCPT_STORE).getAll();
+    g.onsuccess = () => res((g.result || []).map(x => ({ id: x.id, txnId: x.txnId, size: x.size || (x.blob ? x.blob.size : 0), at: x.at })));
+    g.onerror = () => res([]);
+  });
+}
+function rcptIsArchive() {
+  try { return localStorage.getItem(RCPT_ARCH_KEY) === '1'; } catch (e) { return false; }
+}
+function rcptSetArchive(on) {
+  try { localStorage.setItem(RCPT_ARCH_KEY, on ? '1' : '0'); } catch (e) {}
+  renderView();
+  toast(on ? 'هذا الجهاز صار «الأرشيف» — سيستقبل إشعارات بقية الأجهزة' : 'أُلغي وضع الأرشيف على هذا الجهاز', 'ok');
+}
+
+/* ---------- 2) ضغط الصور قبل الحفظ ---------- */
+async function rcptCompress(file) {
+  if (!/^image\//.test(file.type || '')) throw new Error('صور فقط');
+  if (file.size < 120000) return file;                 // صغيرة أصلاً — تبقى كما هي
+  const url = URL.createObjectURL(file);
+  let img;
+  try {
+    img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('تعذّر قراءة الصورة'));
+      i.src = url;
+    });
+  } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  const sc = Math.min(1, RCPT_MAX_SIDE / Math.max(w, h));
+  w = Math.max(1, Math.round(w * sc)); h = Math.max(1, Math.round(h * sc));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(img, 0, 0, w, h);
+  let q = 0.72;
+  let out = await new Promise(r => c.toBlob(r, 'image/jpeg', q));
+  while (out && out.size > RCPT_TARGET && q > 0.4) {
+    q -= 0.1;
+    out = await new Promise(r => c.toBlob(r, 'image/jpeg', q));
+  }
+  return (out && out.size) ? out : file;
+}
+
+/* ---------- 3) الإرفاق (مشترك بين النموذج والقائمة) ---------- */
+async function rcptAddFiles(txnId, files, list) {
+  const arr = Array.prototype.slice.call(files || []);
+  if (!arr.length) return list || [];
+  let added = 0, skipped = 0;
+  for (const f of arr) {
+    if (!/^image\//.test(f.type || '')) { skipped++; continue; }
+    try {
+      const blob = await rcptCompress(f);
+      const id = uid();
+      await rcptPut(id, blob, { txnId: txnId, size: blob.size, mime: blob.type || 'image/jpeg' });
+      const meta = { id: id, s: blob.size, m: blob.type || 'image/jpeg', at: Date.now(), st: 'q', by: (CU ? CU.name : '') };
+      if (Array.isArray(list)) list.push(meta);
+      added++;
+    } catch (e) { skipped++; }
+  }
+  if (added) { toast('أُضيف ' + added + ' إشعاراً ✓' + (added > 1 ? ' (صُغِّرت تلقائياً)' : ''), 'ok'); scheduleSync(1200); }
+  if (skipped) toast('تُقبل الصور فقط — تُخطّي ' + skipped, 'err');
+  return list;
+}
+async function rcptDrop(id, list) {
+  const i = (list || []).findIndex(r => r.id === id);
+  if (i > -1) list.splice(i, 1);
+  await rcptDel(id);
+  return list;
+}
+function rcptBadge(t) {
+  const n = (t && Array.isArray(t.receipts)) ? t.receipts.length : 0;
+  if (!n) return '';
+  return '<button type="button" class="rcpt-badge" data-act="rcpt-view" data-id="' + esc(t.id) + '" title="إشعارات التحويل">📎 ' + n + '</button>';
+}
+
+/* ---------- 4) العرض ---------- */
+async function rcptUrlFor(rec) {
+  if (_rcptURLs.has(rec.id)) return _rcptURLs.get(rec.id);
+  const row = await rcptGet(rec.id);
+  if (!row || !row.blob) return null;
+  const u = URL.createObjectURL(row.blob);
+  _rcptURLs.set(rec.id, u);
+  return u;
+}
+async function rcptView(txnId) {
+  const t = S.txns.find(x => x.id === txnId);
+  if (!t) return;
+  const list = Array.isArray(t.receipts) ? t.receipts : [];
+  if (!list.length) { toast('لا توجد إشعارات على هذه المعاملة', 'err'); return; }
+  const label = { q: 'بانتظار الرفع', u: 'بانتظار الكمبيوتر', a: 'محفوظ على هذا الجهاز', x: 'محفوظ على الكمبيوتر' };
+  let html = '<div class="rcpt-viewer" id="rcptViewer">';
+  for (const r of list) {
+    const u = await rcptUrlFor(r);
+    html += '<figure class="rcpt-item" data-rid="' + esc(r.id) + '">' +
+      (u ? '<img src="' + esc(u) + '" alt="إشعار تحويل">' :
+        '<div class="rcpt-missing">' + (r.st === 'x' ? '📎 محفوظ على الكمبيوتر — غير موجود على هذا الجهاز' : 'الصورة غير متاحة على هذا الجهاز بعد') + '</div>') +
+      '<figcaption class="small muted">' + esc((label[r.st] || '') + ' · ' + Math.round((+r.s || 0) / 1024) + 'KB') + '</figcaption></figure>';
+  }
+  html += '</div>' + '<div class="small muted" style="margin-top:10px">' + esc(t.desc || '') + ' — ' + esc(dmy(t.date)) + ' · ' + esc(fmt(t.amount) + ' ' + t.currency) + '</div>';
+  modal({ title: '📎 إشعارات التحويل (' + list.length + ')', body: html, footer: '<button class="btn ghost" data-close>إغلاق</button>' });
+}
+
+/* ---------- 5) النقل عبر Supabase Storage ---------- */
+function rcptBase() {
+  const c = (typeof syncCfg === 'function') ? syncCfg() : null;
+  if (!c || !c.url || !c.uid) return null;
+  return { url: syncNormUrl(c.url), key: c.anonKey, uid: c.uid };
+}
+async function rcptHdrs(extra) {
+  const c = syncCfg();
+  try { await sbEnsureToken(); } catch (e) {}
+  return Object.assign({ apikey: c.anonKey, Authorization: 'Bearer ' + (c.accessToken || c.anonKey) }, extra || {});
+}
+async function rcptCloudPut(txnId, rec, blob) {
+  const b = rcptBase(); if (!b) return false;
+  const path = b.uid + '/' + txnId + '/' + rec.id + '.jpg';
+  const res = await fetch(b.url + '/storage/v1/object/' + RCPT_BUCKET + '/' + path, {
+    method: 'POST', headers: await rcptHdrs({ 'Content-Type': blob.type || 'image/jpeg', 'x-upsert': 'true' }), body: blob
+  });
+  return res.ok;
+}
+async function rcptCloudGet(txnId, rec) {
+  const b = rcptBase(); if (!b) return null;
+  const path = b.uid + '/' + txnId + '/' + rec.id + '.jpg';
+  const res = await fetch(b.url + '/storage/v1/object/' + RCPT_BUCKET + '/' + path, { headers: await rcptHdrs() });
+  if (!res.ok) return null;
+  return await res.blob();
+}
+async function rcptCloudDel(txnId, rec) {
+  const b = rcptBase(); if (!b) return false;
+  const path = b.uid + '/' + txnId + '/' + rec.id + '.jpg';
+  const res = await fetch(b.url + '/storage/v1/object/' + RCPT_BUCKET + '/' + path, { method: 'DELETE', headers: await rcptHdrs() });
+  return res.ok || res.status === 404;
+}
+
+/* ---------- 6) المعالجة: رفع ← تنزيل وإقرار ← حذف من المرسل ---------- */
+async function rcptProcess(silent) {
+  if (!rcptBase()) { if (!silent) toast('المزامنة غير مفعّلة — لا يمكن نقل الإشعارات', 'err'); return { ok: false }; }
+  if (!navigator.onLine) { if (!silent) toast('لا يوجد اتصال — ستُنقل الإشعارات عند عودة الشبكة', 'err'); return { ok: false }; }
+  const arch = rcptIsArchive();
+  let up = 0, down = 0, cleared = 0;
+  const txns = (S.txns || []).slice();
+  for (const t of txns) {
+    const list = Array.isArray(t.receipts) ? t.receipts : [];
+    for (const r of list) {
+      if (r.st === 'q') {
+        const row = await rcptGet(r.id);
+        if (row && row.blob) {
+          if (await rcptCloudPut(t.id, r, row.blob)) { r.st = 'u'; up++; touchRec(t); }
+        }
+      } else if (r.st === 'u' && arch) {
+        const blob = await rcptCloudGet(t.id, r);
+        if (blob) {
+          await rcptPut(r.id, blob, { txnId: t.id, size: blob.size, mime: blob.type || 'image/jpeg' });
+          r.st = 'a'; r.at2 = Date.now(); touchRec(t); down++;
+          if (await rcptCloudDel(t.id, r)) cleared++;
+        }
+      }
+    }
+  }
+  if (!arch) {   // المرسل: يحذف نسخته المحلية بعد إقرار الأرشيف
+    for (const t of txns) {
+      for (const r of (t.receipts || [])) {
+        if (r.st === 'a') {
+          const row = await rcptGet(r.id);
+          if (row) { await rcptDel(r.id); r.st = 'x'; touchRec(t); cleared++; }
+        }
+      }
+    }
+  }
+  if (up || down || cleared) { saveNow(); scheduleSync(1000); }
+  if (!silent) {
+    toast((up || down || cleared)
+      ? 'تم النقل ✓ رُفع ' + up + ' · استُلم ' + down + ' · أُفرغ ' + cleared
+      : 'لا يوجد جديد لنقله', (up || down || cleared) ? 'ok' : 'warn');
+    renderView();
+  }
+  return { ok: true, up: up, down: down, cleared: cleared };
+}
+
+/* ---------- 7) النسخة الاحتياطية: تضمين الإشعارات ---------- */
+function blobToB64(blob) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => { const s = String(fr.result || ''); res(s.slice(s.indexOf(',') + 1)); };
+    fr.onerror = () => rej(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+function b64ToBlob(b64, mime) {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], { type: mime || 'image/jpeg' });
+}
+async function rcptDumpForBackup() {
+  const all = await rcptAll();
+  const out = [];
+  for (const m of all) {
+    const row = await rcptGet(m.id);
+    if (row && row.blob) out.push({ id: m.id, txnId: m.txnId, mime: row.blob.type || 'image/jpeg', b64: await blobToB64(row.blob) });
+  }
+  return out;
+}
+async function rcptRestoreFromBackup(arr) {
+  if (!Array.isArray(arr) || !arr.length) return 0;
+  const arch = rcptIsArchive();
+  let n = 0;
+  for (const it of arr) {
+    if (!it || !it.id || !it.b64) continue;
+    try {
+      const blob = b64ToBlob(it.b64, it.mime);
+      await rcptPut(it.id, blob, { txnId: it.txnId, size: blob.size, mime: it.mime || 'image/jpeg' });
+      const t = (S.txns || []).find(x => x.id === it.txnId);
+      const r = t && (t.receipts || []).find(y => y.id === it.id);
+      if (r) { r.st = arch ? 'a' : 'q'; if (!r.s) r.s = blob.size; touchRec(t); }
+      n++;
+    } catch (e) {}
+  }
+  if (n) saveNow();
+  return n;
+}
+
+/* ---------- 8) واجهة: قائمة المرفقات داخل النموذج + بطاقة الإعدادات ---------- */
+var _rcptPending = [];
+var _rcptFormTxn = '';
+var _rcptBusy = false;
+
+async function rcptPaintList() {
+  const box = document.getElementById('rcptList');
+  if (!box) return;
+  if (!_rcptPending.length) { box.innerHTML = '<div class="small muted">لا توجد إشعارات مرفقة</div>'; return; }
+  const stTxt = { q: 'بانتظار الرفع', u: 'بانتظار الأرشيف', a: 'محفوظ هنا', x: 'محفوظ على الكمبيوتر' };
+  let h = '';
+  for (const r of _rcptPending) {
+    const u = await rcptUrlFor(r);
+    h += '<div class="rcpt-thumb">' +
+      (u ? '<img src="' + esc(u) + '" alt="إشعار">' : '<div class="rcpt-missing">📎</div>') +
+      '<div class="rcpt-meta">' + esc(Math.round((+r.s || 0) / 1024) + 'KB · ' + (stTxt[r.st] || '')) + '</div>' +
+      '<button type="button" class="rcpt-x" data-act="rcpt-del" data-rid="' + esc(r.id) + '" title="حذف الإشعار">✕</button>' +
+    '</div>';
+  }
+  box.innerHTML = h;
+}
+
+function rcptFormBoxHtml() {
+  return '<div class="rcpt-box">' +
+    '<div class="rcpt-boxhead"><b>📎 إشعارات التحويل</b>' +
+      '<span class="small muted">تُصغَّر تلقائياً · تُحفظ على جهاز الأرشيف</span></div>' +
+    '<div class="rcpt-list" id="rcptList"><div class="small muted">لا توجد إشعارات مرفقة</div></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
+      '<button type="button" class="btn ghost sm" data-act="rcpt-add">📎 إرفاق صورة</button>' +
+      '<input type="file" id="rcptInput" accept="image/*" multiple hidden>' +
+    '</div>' +
+  '</div>';
+}
+
+function rcptCardHtml() {
+  let q = 0, u = 0, a = 0, x = 0, bytes = 0, n = 0;
+  (S.txns || []).forEach(t => (t.receipts || []).forEach(r => {
+    n++; bytes += (+r.s || 0);
+    if (r.st === 'q') q++; else if (r.st === 'u') u++; else if (r.st === 'a') a++; else if (r.st === 'x') x++;
+  }));
+  const arch = rcptIsArchive();
+  const c = (typeof syncCfg === 'function') ? syncCfg() : null;
+  const okSync = !!(c && c.uid);
+  const size = bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + 'MB' : Math.round(bytes / 1024) + 'KB';
+  return '<div class="card">' +
+    '<div class="card-head"><h3>📎 إشعارات التحويل</h3><div class="spacer"></div><span class="badge n">' + n + '</span></div>' +
+    '<div class="small muted" style="margin-bottom:10px">الصورة تُرفع من الهاتف وتُحفظ على «جهاز الأرشيف» فقط، ثم تُحذف من الهاتف تلقائياً بعد الإقرار.</div>' +
+    '<div class="rcpt-stats">' +
+      '<span class="chip">الإجمالي: <b>' + n + '</b></span>' +
+      '<span class="chip">بانتظار الرفع: <b>' + q + '</b></span>' +
+      '<span class="chip">بانتظار الأرشيف: <b>' + u + '</b></span>' +
+      '<span class="chip">محفوظة على هذا الجهاز: <b>' + a + '</b></span>' +
+      '<span class="chip">أُفرغت من هذا الجهاز: <b>' + x + '</b></span>' +
+      '<span class="chip">الحجم: <b>' + size + '</b></span>' +
+    '</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px">' +
+      '<button class="btn ghost" data-act="rcpt-now">🔄 نقل الإشعارات الآن</button>' +
+    '</div>' +
+    '<label class="rcpt-arch"><input type="checkbox" id="rcptArch" ' + (arch ? 'checked' : '') + ' data-act="rcpt-arch"> ' +
+      '<span>هذا الجهاز هو «الأرشيف» — يستقبل إشعارات بقية الأجهزة (اجعله على الكمبيوتر)</span></label>' +
+    (!okSync ? '<div class="small" style="color:var(--out);margin-top:8px">⚠️ فعّل المزامنة أولاً — بدون حساب سحابي لا تنتقل الإشعارات بين الأجهزة.</div>' : '') +
+    '<div class="small muted" style="margin-top:8px">📦 النسخة الاحتياطية المشفّرة تضمّ الإشعارات المحفوظة على هذا الجهاز.</div>' +
+  '</div>';
 }
 
 
@@ -2983,7 +3392,7 @@ function txnRow(t, compact) {
   return '<tr>' +
     '<td class="nowrap small c-date">' + esc(dmy(t.date)) + '</td>' +
     '<td class="c-type">' + txnBadge(t.kind) + '</td>' +
-    '<td class="c-desc"><b>' + esc(desc) + '</b>' +
+    '<td class="c-desc"><b>' + esc(desc) + '</b>' + rcptBadge(t) +
       (catName(t.category) && t.desc ? '<div class="small muted">' + esc(catName(t.category)) + '</div>' : '') +
       (t.contact ? '<div class="small muted">' + esc(contactName(t.contact)) + '</div>' : '') + '</td>' +
     (compact ? '' : '<td class="small hide-sm c-acc">' + esc(acc) + '</td>') +
@@ -3069,6 +3478,8 @@ function txnForm(id) {
     ? { date: todayISO(), kind: 'expense', account: (S.accounts[0] || {}).id, currency: S.settings.base, method: 'نقداً', amount: '' }
     : S.txns.find(x => x.id === id);
   if (!t) return;
+  _rcptFormTxn = isNew ? uid() : t.id;
+  _rcptPending = Array.isArray(t.receipts) ? t.receipts.slice() : [];
 
   const kind = t.kind || 'expense';
   const body =
@@ -3103,6 +3514,7 @@ function txnForm(id) {
       '<div class="field full"><label>البيان / الوصف</label><input type="text" id="tDesc" value="' + esc(t.desc || '') + '" placeholder="مثال: مبيعات يوم الأحد"></div>' +
       '<div class="field full"><label>ملاحظات</label><textarea id="tNote">' + esc(t.note || '') + '</textarea></div>' +
     '</div>' +
+    rcptFormBoxHtml() +
     '<div id="tErr" style="color:var(--out);font-size:13px;margin-top:10px"></div>' +
     (!isNew && (t.createdBy || t.updatedBy)
       ? '<div class="small muted" style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">' +
@@ -3220,10 +3632,11 @@ function txnForm(id) {
           return (v.kind !== 'income' && before >= 0 && after < 0) ? { acc: accName(v.account), after: after } : null;
         })();
         if (isNew) {
-          v.id = uid();
+          v.id = _rcptFormTxn || uid();
           v.created = Date.now();
           v.updatedAt = Date.now();
           v.createdBy = CU ? CU.name : '';
+          v.receipts = _rcptPending.slice();
           S.txns.push(v);
           logAct('add', 'معاملة ' + ({ income: 'وارد', expense: 'منصرف', transfer: 'تحويل' })[v.kind] + ': ' + amtTxt);
         } else {
@@ -3235,6 +3648,7 @@ function txnForm(id) {
           v.updatedBy = CU ? CU.name : '';
           v.updatedAtLabel = nowStamp();
           v.updatedAt = Date.now();
+          v.receipts = _rcptPending.slice();
           S.txns[idx] = v;
           logAct('edit', 'تعديل معاملة ' + ({ income: 'وارد', expense: 'منصرف', transfer: 'تحويل' })[v.kind] + ': ' + amtTxt +
             (before.amount != null && (+before.amount !== +v.amount || before.kind !== v.kind)
@@ -3797,6 +4211,8 @@ function viewSettings() {
         '</div>' +
       '</div>' +
 
+      rcptCardHtml() +
+
       '<div class="card" style="margin-bottom:14px">' +
         '<div class="card-head"><h3>💾 النسخ الاحتياطي التلقائي</h3><div class="spacer"></div>' +
           '<span class="badge ' + (backupDue() ? 'out' : 'in') + '">' +
@@ -4002,7 +4418,14 @@ function userPasswordForm(id) {
    ========================================================= */
 function viewAudit() {
   const f = ui.audit;
-  let list = (S.audit || []).slice().reverse();
+  // الأحدث أولاً دائماً — بفرز صريح بالوقت لا بالاعتماد على ترتيب المصفوفة
+  // (بعد دمج المزامنة يصبح الترتيب الداخلي تصاعدياً، فكان العرض يبدأ من أقدم قيد)
+  // الأحدث أولاً دائماً: فرز بالوقت تنازلياً، وعند تساوي الدقيقة يفوز الأعلى ترتيباً
+  // (المصفوفة تُحفظ كرونولوجية تصاعدياً) — منعاً لعرض الأقدم أولاً بعد المزامنة
+  let list = (S.audit || []).map((a, i) => ({ a: a, i: i })).sort((x, y) => {
+    const c = String((y.a && y.a.at) || '').localeCompare(String((x.a && x.a.at) || ''));
+    return c !== 0 ? c : (y.i - x.i);
+  }).map(o => o.a);
   if (f.user) list = list.filter(a => a.user === f.user);
   if (f.action) list = list.filter(a => a.action === f.action);
   if (f.q) {
@@ -4793,6 +5216,11 @@ const ACTIONS = {
     restoreSnapshot(+el.dataset.i);
   },
   'trash-restore': el => restoreTrash(el.dataset.id),
+  'rcpt-add': () => { const i = document.getElementById('rcptInput'); if (i) i.click(); },
+  'rcpt-del': el => rcptDrop(el.dataset.rid, _rcptPending).then(() => rcptPaintList()),
+  'rcpt-view': el => rcptView(el.dataset.id),
+  'rcpt-now': () => rcptProcess(false),
+  'rcpt-arch': () => rcptSetArchive(!rcptIsArchive()),
   'sync-reset': () => syncReset(),
   'trash-empty': async () => {
     if (!(await ask('تفريغ سلة المحذوفات نهائياً؟', 'تفريغ'))) return;
@@ -4889,6 +5317,7 @@ function refreshTxnList() {
 /* ---------- ربط الأحداث ---------- */
 const ACT_PERM = {
   'quick-add': 'txn:write', 'txn-new': 'txn:write', 'txn-edit': 'txn:write', 'txn-del': 'txn:delete',
+  'rcpt-add': 'txn:write', 'rcpt-del': 'txn:write', 'rcpt-view': '', 'rcpt-now': '', 'rcpt-arch': 'settings',
   'acc-new': 'data:write', 'acc-edit': 'data:write', 'acc-del': 'data:write',
   'ct-new': 'data:write', 'ct-edit': 'data:write', 'ct-del': 'data:write',
   'cat-new': 'data:write', 'cat-edit': 'data:write', 'cat-del': 'data:write',
@@ -4947,6 +5376,11 @@ function bindGlobal() {
     if (id === 'fFrom') { ui.txn.from = e.target.value; refreshTxnList(); }
     else if (id === 'fTo') { ui.txn.to = e.target.value; refreshTxnList(); }
     else if (id === 'fKind') { ui.txn.kind = e.target.value; refreshTxnList(); }
+    else if (id === 'rcptInput') {
+      const f = Array.prototype.slice.call(e.target.files || []);  // نسخة قبل التفريغ (FileList حيّة)
+      e.target.value = '';
+      if (f.length) rcptAddFiles(_rcptFormTxn, f, _rcptPending).then(() => rcptPaintList());
+    }
     else if (id === 'fAcc') { ui.txn.account = e.target.value; refreshTxnList(); }
     else if (id === 'repFrom') { ui.rep.from = e.target.value; renderView(); }
     else if (id === 'repTo') { ui.rep.to = e.target.value; renderView(); }
@@ -5215,7 +5649,8 @@ function syncMergeDocs(local, remote) {
   const auditMap = new Map();
   (remote.audit || []).forEach(a => auditMap.set(a.id, a));
   (local.audit || []).forEach(a => auditMap.set(a.id, a));
-  const audit = Array.from(auditMap.values()).sort((x, y) => String(y.at).localeCompare(String(x.at))).slice(0, 3000);
+  // تصاعدي بالوقت (كرونولوجي) ليتوافق مع ترتيب الإضافة المحلية (push) — العرض يفرز تنازلياً
+  const audit = Array.from(auditMap.values()).sort((x, y) => String(x.at || '').localeCompare(String(y.at || ''))).slice(-3000);
 
   // السلة: اتحاد بالمعرّف، ثم استبعاد ما أُفرغ نهائياً (trashClearedAt) وما استُعيد بعد حذفه.
   // بدون هذا كان «تفريغ السلة» يُلغى عند أول مزامنة لأن النسخة السحابية الأقدم تُعيد الإدخالات.
@@ -5258,7 +5693,7 @@ function syncPayload(doc) {
     categories: doc.categories || [],
     txns: doc.txns || [],
     users: doc.users || [],
-    audit: (doc.audit || []).slice(0, 800),
+    audit: (doc.audit || []).slice(-800),   // أحدث 800 قيداً (كان يرسل الأقدم فيضيع الحدث الأخير في نسخة السحابة)
     auditBase: doc.auditBase || '',
     trash: (doc.trash || []).slice(0, 100),
     trashClearedAt: +doc.trashClearedAt || 0,
@@ -5341,6 +5776,13 @@ async function syncNow(reason, silent) {
     }
     c.lastSyncTs = Date.now();
     saveNow();
+    // نقل الإشعارات بعد المزامنة (رفع من المرسل / تنزيل وإقرار على الأرشيف)
+    try {
+      if (typeof rcptProcess === 'function' && !_rcptBusy) {
+        _rcptBusy = true;
+        setTimeout(() => { rcptProcess(true).catch(() => {}).then(() => { _rcptBusy = false; }); }, 300);
+      }
+    } catch (e) {}
     if (!silent) toast('تمت المزامنة ✓', 'ok');
     return true;
   } catch (e) {
