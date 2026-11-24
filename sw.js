@@ -1,5 +1,5 @@
 /* Service Worker — تشغيل البرنامج دون إنترنت بعد أول فتح */
-const CACHE = 'hisabat-v39';
+const CACHE = 'hisabat-v40';
 const ASSETS = [
   './',
   './index.html',
@@ -34,7 +34,8 @@ self.addEventListener('fetch', event => {
   // صفحات: الشبكة أولاً ثم الكاش (لمعرفة التحديثات)
   if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(req).then(res => {
+      // cache:'reload' = تجاوز كاش HTTP (GitHub Pages يضع max-age=600) فلا يبقى المستخدم على نسخة قديمة
+      fetch(req, { cache: 'reload' }).then(res => {
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put('./index.html', copy));
         return res;

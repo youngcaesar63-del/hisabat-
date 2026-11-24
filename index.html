@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f766e">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http: ws:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <meta name="referrer" content="no-referrer">
-<script>window.APP_BUILD = {iso:'2026-11-24T08:43Z', size:'267317', fingerprint:'f9e56e7730e1959a95a9a28939bbc09fa54032db991e46f85797e651e5aacc5e'};</script>
+<script>window.APP_BUILD = {iso:'2026-11-24T09:05Z', size:'267317', fingerprint:'8c86405c175efaa3a69a3c90b5cab75eaad1d4c5979fdcd224a35b0aea9d031c'};</script>
 <title>برنامج الحسابات — الوارد والمنصرف</title>
 <style>
 *,
@@ -5539,9 +5539,17 @@ window.addEventListener('online', function () {
 </script>
 
 <script>
+/* تسجيل عامل الخدمة: updateViaCache='none' يجعل المتصفح يتجاوز كاش HTTP عند سؤال sw.js
+   (GitHub Pages يخدمه بـ max-age=600، فكان التحديث يتأخر حتى 10 دقائق على أجهزة المستخدمين)
+   + فحص تحديث عند كل فتح وعند العودة إلى الصفحة. */
 if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('sw.js').catch(function () {});
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+      try { reg.update(); } catch (e) {}
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) { try { reg.update(); } catch (e) {} }
+      });
+    }).catch(function () {});
   });
 }
 </script>
