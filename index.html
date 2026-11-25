@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0f766e">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http: ws:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <meta name="referrer" content="no-referrer">
-<script>window.APP_BUILD = {iso:'2026-11-24T12:47Z', size:'298271', fingerprint:'b2287ffb14a4961a3ef952b017828c50cccc5539fb6c978bc42fb8f834632b6a'};</script>
+<script>window.APP_BUILD = {iso:'2026-11-24T13:48Z', size:'301796', fingerprint:'ff92278ebc97dd27513e0463fc45e10bab12521f6d6c9977f703976ae9c6d631'};</script>
 <title>برنامج الحسابات — الوارد والمنصرف</title>
 <style>
 *,
@@ -1525,6 +1525,8 @@ function appHashChanged() {
   if (!seen || !seen.hash) return false;
   return seen.hash !== APP_SELF_HASH;
 }
+
+const APP_VER_LABEL = '1.0 — أول إصدار';   // أول إصدار
 
 function buildDateText() {
   const iso = (window.APP_BUILD || {}).iso;
@@ -3695,6 +3697,40 @@ function viewTxns() {
 }
 
 /* ---------- نموذج المعاملة ---------- */
+function normLookupName(s) {
+  return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+/* بند مكتوب يدوياً: يُعاد استخدام الموجود بنفس الاسم وإلا يُضاف بند جديد */
+function ensureCategoryByName(name, kind) {
+  const raw = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return null;
+  const n = normLookupName(raw);
+  const hit = (S.categories || []).find(c => normLookupName(c.name) === n);
+  if (hit) return hit;
+  const obj = { id: uid(), name: raw, kind: (kind === 'income' || kind === 'expense') ? kind : 'both' };
+  touchRec(obj);
+  S.categories.push(obj);
+  logAct('add', 'إضافة بند: ' + raw);
+  return obj;
+}
+/* طرف مكتوب يدوياً: يُعاد استخدام الموجود بنفس الاسم وإلا يُضاف طرف جديد */
+function ensureContactByName(name, kind) {
+  const raw = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return null;
+  const n = normLookupName(raw);
+  const hit = (S.contacts || []).find(c => normLookupName(c.name) === n);
+  if (hit) return hit;
+  const obj = {
+    id: uid(), name: raw,
+    type: kind === 'income' ? 'customer' : (kind === 'expense' ? 'supplier' : 'both'),
+    phone: '', opening: 0, note: ''
+  };
+  touchRec(obj);
+  S.contacts.push(obj);
+  logAct('add', 'إضافة طرف: ' + raw);
+  return obj;
+}
+
 function txnForm(id) {
   const isNew = !id;
   const t = isNew
@@ -3726,9 +3762,12 @@ function txnForm(id) {
         ' <button class="btn ghost sm" style="margin-inline-start:8px" data-act="acc-new-quick">➕ إضافة حساب</button></div></div>') +
       '<div class="field"><label id="accLabel">الحساب / الصندوق *</label><select id="tAcc">' + optAccounts(t.account) + '</select></div>' +
       '<div class="field" id="toAccField"><label>إلى حساب *</label><select id="tToAcc">' + optAccounts(t.toAccount) + '</select></div>' +
-      '<div class="field" id="catField"><label>البند</label><select id="tCat"><option value="">— بدون —</option>' + optCategories(kind, t.category) + '</select></div>' +
+      '<div class="field" id="catField"><label>البند</label><select id="tCat"><option value="">— بدون —</option>' + optCategories(kind, t.category) + '</select>' +
+        '<input type="text" id="tCatNew" maxlength="60" autocomplete="off" placeholder="أو اكتب بنداً جديداً — يُحفظ تلقائياً">' +
+        '<span class="hint">الكتابة هنا تتقدّم على القائمة ويُضاف البند إلى قائمة البنود</span></div>' +
       '<div class="field" id="contactField"><label>الطرف (عميل/مورد)</label><select id="tContact">' + optContacts(t.contact) + '</select>' +
-        '<span class="hint"><a href="#" data-act="quick-contact">+ إضافة طرف جديد</a></span></div>' +
+        '<input type="text" id="tContactNew" maxlength="60" autocomplete="off" placeholder="أو اكتب طرفاً جديداً — يُحفظ تلقائياً">' +
+        '<span class="hint"><a href="#" data-act="quick-contact">+ إضافة طرف بالتفاصيل (هاتف/رصيد)</a></span></div>' +
       '<div class="field"><label>طريقة الدفع</label><select id="tMethod">' +
         ['نقداً', 'بنك', 'شيك', 'محفظة إلكترونية', 'آجل', 'أخرى'].map(m =>
           '<option' + (t.method === m ? ' selected' : '') + '>' + m + '</option>').join('') +
@@ -3847,6 +3886,28 @@ function txnForm(id) {
         }
         if (lockedDate(v.date)) { err.textContent = '🔒 ' + lockMsg(); return; }
         if (!isNew && lockedDate(t.date)) { err.textContent = '🔒 هذه المعاملة في فترة مقفلة ولا يمكن تعديلها'; return; }
+        // بند/طرف مكتوبان يدوياً (غير المحفوظ مسبقاً)
+        const added = [];
+        if (v.kind !== 'transfer') {
+          const catNew = (($id('#tCatNew') || {}).value || '').trim();
+          if (catNew) {
+            const before = (S.categories || []).length;
+            const got = ensureCategoryByName(catNew, v.kind);
+            if (got) {
+              v.category = got.id;
+              if ((S.categories || []).length > before) added.push('البند «' + got.name + '»');
+            }
+          }
+          const ctNew = (($id('#tContactNew') || {}).value || '').trim();
+          if (ctNew) {
+            const before = (S.contacts || []).length;
+            const got = ensureContactByName(ctNew, v.kind);
+            if (got) {
+              v.contact = got.id;
+              if ((S.contacts || []).length > before) added.push('الطرف «' + got.name + '»');
+            }
+          }
+        }
         const amtTxt = fmt(v.amount) + ' ' + v.currency + (v.desc ? ' — ' + v.desc : '');
         const negWarn = (() => {
           const before = accountBalance(v.account);
@@ -3881,6 +3942,9 @@ function txnForm(id) {
         toast(isNew ? 'تمت إضافة المعاملة ✓' : 'تم تعديل المعاملة ✓', 'ok');
         if (negWarn) {
           setTimeout(() => toast('⚠️ تنبيه: رصيد «' + negWarn.acc + '» صار سالباً (' + fmt(negWarn.after) + ' ' + S.settings.base + ') — تحقّق من الرصيد الافتتاحي إن كان خطأً', 'warn'), 350);
+        }
+        if (added.length) {
+          setTimeout(() => toast('أُضيف إلى القوائم: ' + added.join(' · ') + ' ✓', 'ok'), 450);
         }
         if (again) {
           close();
@@ -4522,7 +4586,7 @@ function viewSettings() {
           '• تصدير كامل إلى Excel و CSV و JSON.<br>' +
         '</div>' +
         '<div class="small" style="margin-top:12px;line-height:1.9">' +
-          '<b>الإصدار:</b> ' + esc(buildDateText()) + '<br>' +
+          '<b>الإصدار:</b> <b>' + esc(APP_VER_LABEL) + '</b> · تاريخ البناء: ' + esc(buildDateText()) + '<br>' +
           '<b>بصمة الإصدار:</b> <code id="fpBuild" style="font-size:11px;word-break:break-all">' + esc(((window.APP_BUILD || {}).fingerprint) || '—') + '</code><br>' +
           '<b>بصمة الكود الحالي:</b> <code id="fpSelf" style="font-size:11px;word-break:break-all">' + esc(APP_SELF_HASH || '…') + '</code>' +
         '</div>' +
@@ -5546,6 +5610,14 @@ const ACT_PERM = {
   'quick-add': 'txn:write', 'txn-new': 'txn:write', 'txn-edit': 'txn:write', 'txn-del': 'txn:delete',
   'rcpt-add': 'txn:write', 'rcpt-del': 'txn:write', 'rcpt-view': '', 'rcpt-now': '', 'rcpt-arch': 'settings',
   'rcpt-dir-pick': 'settings', 'rcpt-dir-grant': 'settings', 'rcpt-dir-save': 'settings', 'rcpt-dir-unlink': 'settings',
+  // إجراءات حساسة كانت مكشوفة بلا تقييد صريح — صارت تحت صلاحية الإعدادات
+  'sync-signup': 'settings', 'sync-login': 'settings', 'sync-logout': 'settings', 'sync-reset': 'settings', 'sync-sql': 'settings',
+  'backup-link': 'settings', 'backup-unlink': 'settings', 'backup-write': 'settings', 'backup-snooze': 'settings',
+  'crypt-enable': 'settings', 'crypt-disable': 'settings', 'crypt-change': 'settings',
+  'snap-now': 'settings', 'snap-restore': 'settings', 'audit-clear': 'settings', 'integrity-check': 'settings',
+  'accept-hash': 'settings', 'rehash': 'settings', 'copy-fingerprint': 'settings',
+  'csv-import': 'settings', 'csv-template': 'export',
+  'trash-empty': 'txn:delete', 'trash-restore': 'txn:write', 'acc-new-quick': 'data:write',
   'acc-new': 'data:write', 'acc-edit': 'data:write', 'acc-del': 'data:write',
   'ct-new': 'data:write', 'ct-edit': 'data:write', 'ct-del': 'data:write',
   'cat-new': 'data:write', 'cat-edit': 'data:write', 'cat-del': 'data:write',
@@ -6223,6 +6295,5 @@ if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
   });
 }
 </script>
-<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5f891c229f8a743',t:'MTc5NTUyNDk0MQ=='};var l=window.parent.location,o;try{o=new URL(l.origin).origin}catch(e){try{o=new URL(new URL(l.href).origin).origin}catch(e){o=''}}var u='/cdn-cgi/challenge-platform/scripts/jsd/main.js?ray=a5f891c229f8a743',a=document.createElement('script');a.src=o?new URL(u,o).href:u;document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"1954b47c125f43f8b4338b3c4f804e4f","spa":2}' crossorigin="anonymous"></script>
 </body>
 </html>
